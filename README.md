@@ -1,4 +1,4 @@
-# Cypher AI — MITRE ATT&CK Threat Intelligence Engine
+# Cypher AI  MITRE ATT&CK Threat Intelligence Engine
 
 Cypher AI is an authoritative cybersecurity threat intelligence and reasoning platform powered by a **deterministic Graph-RAG pipeline** grounded strictly in the official MITRE ATT&CK enterprise knowledge graph.
 
@@ -16,7 +16,7 @@ Cypher AI is an authoritative cybersecurity threat intelligence and reasoning pl
 
 ## Architecture Flow
 
-`mermaid
+```mermaid
 flowchart TD
     A["User Query + History"] --> B["Multi-Entity ID Resolution\n(T..., M..., G..., S...)"]
     B --> C["Hybrid Search (FTS5 BM25 + FastEmbed Dense)"]
@@ -24,7 +24,7 @@ flowchart TD
     D --> E["SQLite Graph Traversal\n(Mitigations, Groups, Software)"]
     E --> F["Single Unified LLM Call\n(OpenAI / Groq Compatible)"]
     F --> G["Structured ThreatAnalysisReport + Markdown Narrative"]
-`
+```
 
 ---
 
@@ -36,10 +36,10 @@ flowchart TD
 - Groq or OpenAI API Key
 
 ### 2. Backend Setup
-`ash
+```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/cypher-ai.git
-cd cypher-ai
+git clone https://github.com/amdraihaan2005/cypher.git
+cd cypher
 
 # Install Python dependencies
 pip install -r requirements.txt
@@ -47,22 +47,22 @@ pip install -r requirements.txt
 # Configure environment variables
 copy .env.example .env
 # Edit .env with your OPENAI_API_KEY
-`
+```
 
 ### 3. Start Backend Server
-`ash
+```bash
 python scripts/run_server.py --port 8000
-`
-- API is live at http://localhost:8000
-- Interactive OpenAPI Docs: http://localhost:8000/docs
+```
+- API is live at `http://localhost:8000`
+- Interactive OpenAPI Docs: `http://localhost:8000/docs`
 
 ### 4. Start Frontend
-`ash
+```bash
 cd frontend
 npm install
 npm run dev
-`
-- Frontend will be live at http://localhost:5173
+```
+- Frontend will be live at `http://localhost:5173`
 
 ---
 
