@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Any
 from fastapi import APIRouter, Depends, Query
 
 from src.mitre.db import MitreRepository
@@ -40,6 +40,33 @@ def search(
         repo.close()
 
 
+def _format_search_response(
+    q: str,
+    mode: str,
+    entity_type: Optional[str],
+    results: List[Any],
+) -> HybridSearchResponse:
+    items = [
+        ScoredEntityItem(
+            entity_id=r.entity_id,
+            entity_type=r.entity_type,
+            name=r.name,
+            score=r.score,
+            dense_score=r.dense_score,
+            sparse_score=r.sparse_score,
+            technique=r.detail.technique if hasattr(r.detail, "technique") else None,
+        )
+        for r in results
+    ]
+    return HybridSearchResponse(
+        query=q,
+        mode=mode,
+        entity_type=entity_type,
+        total=len(items),
+        results=items,
+    )
+
+
 @router.get("/semantic", summary="Dense Semantic Vector Search", response_model=HybridSearchResponse)
 def search_semantic(
     q: str = Query(..., min_length=1, description="Natural language question, threat actor behavior, or attack scenario"),
@@ -47,35 +74,9 @@ def search_semantic(
     limit: int = Query(10, ge=1, le=50, description="Maximum number of items to return"),
     engine: HybridSearchEngine = Depends(get_hybrid_engine),
 ):
-    """
-    Understands cybersecurity concepts across all 1,757 MITRE entities via FastEmbed dense vectors.
-    Examples:
-    - 'Russian military intelligence targeting energy grids' -> Sandworm Team (group)
-    - 'Ransomware deleting shadow copies' -> Inhibit System Recovery (technique)
-    - 'In-memory credential dumping tool' -> Mimikatz (software)
-    """
-    results = engine.search_dense(query=q, entity_type=entity_type, limit=limit)
-    items = []
-    for r in results:
-        tech = r.detail.technique if hasattr(r.detail, "technique") else None
-        items.append(
-            ScoredEntityItem(
-                entity_id=r.entity_id,
-                entity_type=r.entity_type,
-                name=r.name,
-                score=r.score,
-                dense_score=r.dense_score,
-                sparse_score=r.sparse_score,
-                technique=tech,
-            )
-        )
-    return HybridSearchResponse(
-        query=q,
-        mode="semantic",
-        entity_type=entity_type,
-        total=len(items),
-        results=items,
-    )
+    """Understands cybersecurity concepts across all 1,757 MITRE entities via FastEmbed dense vectors."""
+    results = engine.search(query=q, entity_type=entity_type, limit=limit, mode="dense")
+    return _format_search_response(q=q, mode="semantic", entity_type=entity_type, results=results)
 
 
 @router.get("/sparse", summary="Sparse BM25 Keyword Search", response_model=HybridSearchResponse)
@@ -85,32 +86,9 @@ def search_sparse(
     limit: int = Query(10, ge=1, le=50, description="Maximum number of items to return"),
     engine: HybridSearchEngine = Depends(get_hybrid_engine),
 ):
-    """
-    Executes an exact token BM25 search across all 1,757 MITRE entities via SQLite FTS5.
-    Examples: 'T1059.001' or 'Cozy Bear' or 'Mimikatz' or 'M1032'
-    """
-    results = engine.search_sparse(query=q, entity_type=entity_type, limit=limit)
-    items = []
-    for r in results:
-        tech = r.detail.technique if hasattr(r.detail, "technique") else None
-        items.append(
-            ScoredEntityItem(
-                entity_id=r.entity_id,
-                entity_type=r.entity_type,
-                name=r.name,
-                score=r.score,
-                dense_score=r.dense_score,
-                sparse_score=r.sparse_score,
-                technique=tech,
-            )
-        )
-    return HybridSearchResponse(
-        query=q,
-        mode="sparse",
-        entity_type=entity_type,
-        total=len(items),
-        results=items,
-    )
+    """Executes an exact token BM25 search across all 1,757 MITRE entities via SQLite FTS5."""
+    results = engine.search(query=q, entity_type=entity_type, limit=limit, mode="sparse")
+    return _format_search_response(q=q, mode="sparse", entity_type=entity_type, results=results)
 
 
 @router.get("/hybrid", summary="Combined Hybrid Semantic + BM25 Search", response_model=HybridSearchResponse)
@@ -121,32 +99,9 @@ def search_hybrid(
     alpha: float = Query(0.6, ge=0.0, le=1.0, description="Weight for dense semantic search (1.0=pure dense, 0.0=pure sparse)"),
     engine: HybridSearchEngine = Depends(get_hybrid_engine),
 ):
-    """
-    Combines dense semantic vector search with sparse BM25 token matching across all 1,757 MITRE entities.
-    Score = alpha * dense_score + (1 - alpha) * sparse_score.
-    """
-    results = engine.search_hybrid(query=q, entity_type=entity_type, limit=limit, alpha=alpha)
-    items = []
-    for r in results:
-        tech = r.detail.technique if hasattr(r.detail, "technique") else None
-        items.append(
-            ScoredEntityItem(
-                entity_id=r.entity_id,
-                entity_type=r.entity_type,
-                name=r.name,
-                score=r.score,
-                dense_score=r.dense_score,
-                sparse_score=r.sparse_score,
-                technique=tech,
-            )
-        )
-    return HybridSearchResponse(
-        query=q,
-        mode="hybrid",
-        entity_type=entity_type,
-        total=len(items),
-        results=items,
-    )
+    """Combines dense semantic vector search with sparse BM25 token matching across all 1,757 MITRE entities."""
+    results = engine.search(query=q, entity_type=entity_type, limit=limit, mode="hybrid", alpha=alpha)
+    return _format_search_response(q=q, mode="hybrid", entity_type=entity_type, results=results)
 
 
 @router.get("/rrf", summary="Reciprocal Rank Fusion (RRF) Search", response_model=HybridSearchResponse)
@@ -157,30 +112,6 @@ def search_rrf(
     k: int = Query(60, ge=1, le=200, description="RRF smoothing constant (default: 60)"),
     engine: HybridSearchEngine = Depends(get_hybrid_engine),
 ):
-    """
-    Executes rank-based fusion (RRF) merging dense and sparse retrieval channels:
-    RRF Score = sum(1 / (k + rank)).
-    Distribution-agnostic and scale-invariant.
-    """
-    results = engine.search_rrf(query=q, entity_type=entity_type, limit=limit, k=k)
-    items = []
-    for r in results:
-        tech = r.detail.technique if hasattr(r.detail, "technique") else None
-        items.append(
-            ScoredEntityItem(
-                entity_id=r.entity_id,
-                entity_type=r.entity_type,
-                name=r.name,
-                score=r.score,
-                dense_score=r.dense_score,
-                sparse_score=r.sparse_score,
-                technique=tech,
-            )
-        )
-    return HybridSearchResponse(
-        query=q,
-        mode="rrf",
-        entity_type=entity_type,
-        total=len(items),
-        results=items,
-    )
+    """Executes rank-based fusion (RRF) merging dense and sparse retrieval channels."""
+    results = engine.search(query=q, entity_type=entity_type, limit=limit, mode="rrf", k=k)
+    return _format_search_response(q=q, mode="rrf", entity_type=entity_type, results=results)

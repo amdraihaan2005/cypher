@@ -70,13 +70,13 @@ class TestMultiEntitySearch(unittest.TestCase):
 
     def test_hybrid_search_global_and_filtered(self):
         # Global query: "Mimikatz" should retrieve both software S0002 and techniques using it
-        global_hits = self.hybrid.search_hybrid("Mimikatz", limit=5)
+        global_hits = self.hybrid.search("Mimikatz", mode="hybrid", limit=5)
         self.assertGreater(len(global_hits), 0)
         types = [h.entity_type for h in global_hits]
         self.assertIn("software", types)
 
         # Filtered query: group only
-        filtered_hits = self.hybrid.search_hybrid("Lazarus bank heist", entity_type="group", limit=3)
+        filtered_hits = self.hybrid.search("Lazarus bank heist", entity_type="group", mode="hybrid", limit=3)
         self.assertGreater(len(filtered_hits), 0)
         self.assertTrue(all(h.entity_type == "group" for h in filtered_hits))
 
@@ -102,6 +102,27 @@ class TestMultiEntitySearch(unittest.TestCase):
         data_hyb = res_hyb.json()
         self.assertEqual(data_hyb["mode"], "hybrid")
         self.assertGreater(len(data_hyb["results"]), 0)
+
+    def test_unified_search_modes_and_hydration(self):
+        # 1. Default RRF search with full hydration
+        rrf_results = self.hybrid.search("LSASS memory dumping", limit=3)
+        self.assertGreater(len(rrf_results), 0)
+        self.assertTrue(hasattr(rrf_results[0], "name"))
+        self.assertTrue(hasattr(rrf_results[0], "score"))
+
+        # 2. Lightweight ID search (hydrate=False)
+        id_results = self.hybrid.search("LSASS memory dumping", limit=3, hydrate=False)
+        self.assertGreater(len(id_results), 0)
+        self.assertIsInstance(id_results[0], tuple)
+        self.assertEqual(len(id_results[0]), 3)  # (entity_id, entity_type, score)
+
+        # 3. Dense mode
+        dense_results = self.hybrid.search("credential theft", mode="dense", limit=2)
+        self.assertGreater(len(dense_results), 0)
+
+        # 4. Sparse mode
+        sparse_results = self.hybrid.search("T1003", mode="sparse", limit=2)
+        self.assertGreater(len(sparse_results), 0)
 
 
 if __name__ == "__main__":

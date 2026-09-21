@@ -105,10 +105,11 @@ class GraphReasoningEngine:
             if last_user_queries:
                 search_q = f"{last_user_queries[-1]} {query}"
 
-        rrf_hits = self.search_engine.search_rrf_ids(
+        rrf_hits = self.search_engine.search(
             query=search_q,
             entity_type="technique",
             limit=max_techniques,
+            hydrate=False,
             k=k,
         )
         for eid, _etype, _score in rrf_hits:
@@ -148,22 +149,27 @@ class GraphReasoningEngine:
                 mit_matches[r["mitigation_attack_id"]].append(r["technique_attack_id"])
 
             seen_mids = {m.mitigation.attack_id for m in direct_mitigations}
+            for dm in direct_mitigations:
+                overlap = [tid for tid in dm.mitigated_techniques if tid in tech_ids]
+                dm.coverage_percentage = round((len(overlap) / total_techs) * 100.0, 1) if total_techs > 0 else 0.0
+
             for mit_id, covered_t in mit_matches.items():
                 if mit_id not in seen_mids:
                     m_detail = self.repo.get_mitigation(mit_id)
                     if not m_detail:
                         continue
                     unique_covered = sorted(list(set(covered_t)))
+                    cov_pct = round((len(unique_covered) / total_techs) * 100.0, 1) if total_techs > 0 else 0.0
                     prioritized_mitigations.append(
                         PrioritizedMitigation(
                             mitigation=m_detail.mitigation,
                             mitigated_techniques=unique_covered,
                             mitigation_count=len(unique_covered),
-                            coverage_percentage=0.0,
+                            coverage_percentage=cov_pct,
                         )
                     )
                     seen_mids.add(mit_id)
-            prioritized_mitigations.sort(key=lambda m: m.mitigation_count, reverse=True)
+            prioritized_mitigations.sort(key=lambda m: (m.mitigation_count, m.coverage_percentage), reverse=True)
 
             # Threat Groups
             grp_cursor = self.repo.conn.execute(

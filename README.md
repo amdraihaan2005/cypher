@@ -49,20 +49,22 @@ copy .env.example .env
 # Edit .env with your OPENAI_API_KEY
 ```
 
-### 3. Start Backend Server
+### 3. Launch Backend & Frontend (Single Command)
+You can start both the FastAPI backend and Vite frontend together with one command:
 ```bash
-python scripts/run_server.py --port 8000
-```
-- API is live at `http://localhost:8000`
-- Interactive OpenAPI Docs: `http://localhost:8000/docs`
-
-### 4. Start Frontend
-```bash
-cd frontend
-npm install
+python dev.py
+# or
 npm run dev
 ```
-- Frontend will be live at `http://localhost:5173`
+- **Frontend Dashboard**: `http://localhost:5173`
+- **Backend API**: `http://localhost:8000`
+- **Interactive OpenAPI Docs**: `http://localhost:8000/docs`
+
+*(Optional) You can still run services independently if needed:*
+```bash
+python scripts/run_server.py --port 8000 --reload  # Backend only
+npm run dev --prefix frontend                     # Frontend only
+```
 
 ---
 

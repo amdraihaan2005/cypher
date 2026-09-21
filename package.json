@@ -1,0 +1,21 @@
+{
+  "name": "cypher-ai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cypher AI - MITRE ATT&CK & Threat Intelligence Platform",
+  "scripts": {
+    "dev": "python dev.py",
+    "dev:backend": "python scripts/run_server.py --port 8000 --reload",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "build:frontend": "npm run build --prefix frontend",
+    "test": "python -m unittest discover tests"
+  },
+  "keywords": [
+    "cybersecurity",
+    "mitre-attack",
+    "threat-intelligence",
+    "rag"
+  ],
+  "author": "",
+  "license": "ISC"
+}
