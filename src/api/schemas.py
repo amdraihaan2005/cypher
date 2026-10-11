@@ -1,7 +1,8 @@
-from typing import List, Generic, TypeVar, Optional, Dict, Any
-from pydantic import BaseModel, Field
+from typing import List, Generic, TypeVar, Optional, Dict
+from pydantic import Field
 
 from src.mitre.schema import (
+    MitreBaseModel,
     TacticItem,
     TechniqueItem,
     MitigationItem,
@@ -17,7 +18,7 @@ from src.mitre.schema import (
 T = TypeVar("T")
 
 
-class PaginatedResponse(BaseModel, Generic[T]):
+class PaginatedResponse(MitreBaseModel, Generic[T]):
     items: List[T]
     total: int
     limit: int
@@ -25,21 +26,21 @@ class PaginatedResponse(BaseModel, Generic[T]):
     has_more: bool
 
 
-class SearchResponse(BaseModel):
+class SearchResponse(MitreBaseModel):
     query: str
     techniques: List[TechniqueItem] = Field(default_factory=list)
     groups: List[GroupItem] = Field(default_factory=list)
     software: List[SoftwareItem] = Field(default_factory=list)
 
 
-class HealthResponse(BaseModel):
+class HealthResponse(MitreBaseModel):
     status: str = "ok"
     version: str = "1.0.0"
     database_connected: bool
-    statistics: Dict[str, int]
+    statistics: Dict[str, int] = Field(default_factory=dict)
 
 
-class ScoredEntityItem(BaseModel):
+class ScoredEntityItem(MitreBaseModel):
     entity_id: str
     entity_type: str  # 'technique', 'tactic', 'mitigation', 'group', 'software'
     name: str
@@ -49,9 +50,18 @@ class ScoredEntityItem(BaseModel):
     technique: Optional[TechniqueItem] = None
 
 
-class HybridSearchResponse(BaseModel):
+class HybridSearchResponse(MitreBaseModel):
     query: str
-    mode: str  # 'hybrid', 'semantic', 'sparse'
+    mode: str  # 'hybrid', 'semantic', 'sparse', 'rrf'
     entity_type: Optional[str] = None
     total: int
-    results: List[ScoredEntityItem]
+    results: List[ScoredEntityItem] = Field(default_factory=list)
+
+
+__all__ = [
+    "PaginatedResponse",
+    "SearchResponse",
+    "HealthResponse",
+    "ScoredEntityItem",
+    "HybridSearchResponse",
+]

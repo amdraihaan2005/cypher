@@ -1,8 +1,13 @@
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class TacticItem(BaseModel):
+class MitreBaseModel(BaseModel):
+    """Base model configured for Pydantic v2 attribute mapping and serialization."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+
+class TacticItem(MitreBaseModel):
     stix_id: str
     attack_id: str
     name: str
@@ -11,7 +16,7 @@ class TacticItem(BaseModel):
     url: Optional[str] = None
 
 
-class TechniqueItem(BaseModel):
+class TechniqueItem(MitreBaseModel):
     stix_id: str
     attack_id: str
     name: str
@@ -25,7 +30,7 @@ class TechniqueItem(BaseModel):
     url: Optional[str] = None
 
 
-class MitigationItem(BaseModel):
+class MitigationItem(MitreBaseModel):
     stix_id: str
     attack_id: str
     name: str
@@ -33,7 +38,7 @@ class MitigationItem(BaseModel):
     url: Optional[str] = None
 
 
-class GroupItem(BaseModel):
+class GroupItem(MitreBaseModel):
     stix_id: str
     attack_id: str
     name: str
@@ -42,7 +47,7 @@ class GroupItem(BaseModel):
     url: Optional[str] = None
 
 
-class SoftwareItem(BaseModel):
+class SoftwareItem(MitreBaseModel):
     stix_id: str
     attack_id: str
     name: str
@@ -53,7 +58,7 @@ class SoftwareItem(BaseModel):
     url: Optional[str] = None
 
 
-class TechniqueDetail(BaseModel):
+class TechniqueDetail(MitreBaseModel):
     technique: TechniqueItem
     subtechniques: List[TechniqueItem] = Field(default_factory=list)
     mitigations: List[MitigationItem] = Field(default_factory=list)
@@ -61,23 +66,39 @@ class TechniqueDetail(BaseModel):
     software: List[SoftwareItem] = Field(default_factory=list)
 
 
-class TacticDetail(BaseModel):
+class TacticDetail(MitreBaseModel):
     tactic: TacticItem
     techniques: List[TechniqueItem] = Field(default_factory=list)
 
 
-class MitigationDetail(BaseModel):
+class MitigationDetail(MitreBaseModel):
     mitigation: MitigationItem
     techniques: List[TechniqueItem] = Field(default_factory=list)
 
 
-class GroupDetail(BaseModel):
+class GroupDetail(MitreBaseModel):
     group: GroupItem
     techniques: List[TechniqueItem] = Field(default_factory=list)
     software: List[SoftwareItem] = Field(default_factory=list)
 
 
-class SoftwareDetail(BaseModel):
+class SoftwareDetail(MitreBaseModel):
     software: SoftwareItem
     techniques: List[TechniqueItem] = Field(default_factory=list)
     groups: List[GroupItem] = Field(default_factory=list)
+
+
+__all__ = [
+    "MitreBaseModel",
+    "TacticItem",
+    "TechniqueItem",
+    "MitigationItem",
+    "GroupItem",
+    "SoftwareItem",
+    "TechniqueDetail",
+    "TacticDetail",
+    "MitigationDetail",
+    "GroupDetail",
+    "SoftwareDetail",
+]
+

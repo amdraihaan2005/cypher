@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import TopLogo from './components/TopLogo';
 import Sidebar from './components/Sidebar';
 import PromptBar from './components/PromptBar';
@@ -17,6 +17,16 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [modalEntity, setModalEntity] = useState(null);
   const messagesEndRef = useRef(null);
+  const abortControllerRef = useRef(null);
+
+  // Cleanup any in-flight request when component unmounts
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
 
   // Load threads from localStorage
   useEffect(() => {
@@ -42,10 +52,10 @@ export default function App() {
       let data = JSON.stringify(newThreads);
       // Guard against hitting the ~5MB localStorage limit: prune oldest threads if over 4MB
       const MAX_BYTES = 4 * 1024 * 1024;
-      let threads = newThreads;
-      while (data.length > MAX_BYTES && threads.length > 1) {
-        threads = threads.slice(0, -1); // drop oldest thread (last in array)
-        data = JSON.stringify(threads);
+      let pruned = newThreads;
+      while (data.length > MAX_BYTES && pruned.length > 1) {
+        pruned = pruned.slice(0, -1); // drop oldest thread (last in array)
+        data = JSON.stringify(pruned);
       }
       localStorage.setItem(STORAGE_KEY, data);
     } catch (e) {
@@ -65,6 +75,13 @@ export default function App() {
 
   const handleRunAnalysis = async (searchQuery) => {
     if (!searchQuery || !searchQuery.trim() || loading) return;
+
+    // Abort prior in-flight request if one is still running
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     const trimmed = searchQuery.trim();
     setQuery('');
@@ -128,7 +145,7 @@ export default function App() {
         }))
         .slice(-6); // Cap to last 6 messages to match server-side window
 
-      const report = await analyzeThreat(trimmed, 4, history);
+      const report = await analyzeThreat(trimmed, 4, history, { signal: controller.signal });
 
       const finalAssistantMsg = {
         id: 'a-' + Date.now(),
@@ -152,6 +169,10 @@ export default function App() {
 
       saveThreads(finalizedThreads);
     } catch (err) {
+      if (controller.signal.aborted || err?.status === 499) {
+        return; // Request was aborted intentionally
+      }
+
       const errorAssistantMsg = {
         id: 'a-' + Date.now(),
         role: 'assistant',
@@ -173,21 +194,43 @@ export default function App() {
 
       saveThreads(finalizedThreads);
     } finally {
-      setLoading(false);
+      if (abortControllerRef.current === controller) {
+        setLoading(false);
+        abortControllerRef.current = null;
+      }
     }
   };
 
-  const handleNewThread = () => {
+  const handleToggleSidebar = useCallback(() => {
+    setSidebarOpen((prev) => !prev);
+  }, []);
+
+  const handleNewThread = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setLoading(false);
     setActiveThreadId(null);
     setQuery('');
-  };
+  }, []);
 
-  const handleSelectThread = (thread) => {
+  const handleSelectThread = useCallback((thread) => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setLoading(false);
     setActiveThreadId(thread.id);
     setQuery('');
-  };
+  }, []);
 
-  const handleDeleteThread = (threadId) => {
+  const handleDeleteThread = useCallback((threadId) => {
+    if (activeThreadId === threadId && abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      setLoading(false);
+    }
     const updated = threads.filter((t) => t.id !== threadId);
     saveThreads(updated);
     if (activeThreadId === threadId) {
@@ -197,16 +240,20 @@ export default function App() {
         handleNewThread();
       }
     }
-  };
+  }, [activeThreadId, threads, handleNewThread]);
 
-  const handleClearThreads = () => {
+  const handleClearThreads = useCallback(() => {
     saveThreads([]);
     handleNewThread();
-  };
+  }, [handleNewThread]);
 
-  const handleSelectEntity = (entityId, entityType) => {
+  const handleSelectEntity = useCallback((entityId, entityType) => {
     setModalEntity({ id: entityId, type: entityType });
-  };
+  }, []);
+
+  const handleCloseModal = useCallback(() => {
+    setModalEntity(null);
+  }, []);
 
   const isThreadEmpty = messages.length === 0;
 
@@ -215,7 +262,7 @@ export default function App() {
       {/* Left Collapsible Threads Sidebar */}
       <Sidebar
         isOpen={sidebarOpen}
-        onToggle={() => setSidebarOpen(!sidebarOpen)}
+        onToggle={handleToggleSidebar}
         threads={threads}
         activeThreadId={activeThreadId}
         onSelectThread={handleSelectThread}
@@ -269,7 +316,7 @@ export default function App() {
         <EntityModal
           entityId={modalEntity.id}
           entityType={modalEntity.type}
-          onClose={() => setModalEntity(null)}
+          onClose={handleCloseModal}
         />
       )}
     </div>

@@ -62,8 +62,8 @@ npm run dev
 
 *(Optional) You can still run services independently if needed:*
 ```bash
-python scripts/run_server.py --port 8000 --reload  # Backend only
-npm run dev --prefix frontend                     # Frontend only
+uvicorn src.api.app:app --reload --port 8000          # Backend only
+npm run dev --prefix frontend                         # Frontend only
 ```
 
 ---

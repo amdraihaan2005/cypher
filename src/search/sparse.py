@@ -1,6 +1,7 @@
 import re
 import json
 import sqlite3
+import asyncio
 from pathlib import Path
 from typing import List, Tuple, Optional
 
@@ -9,30 +10,50 @@ from src.mitre.db import get_connection, DEFAULT_DB_PATH
 
 def sanitize_fts_query(query: str) -> str:
     """
-    Sanitizes user input into a safe FTS5 query string.
-    Strips dangerous characters, handles punctuation, and supports token prefix matching.
+    Sanitizes user input into a safe SQLite FTS5 query string.
+    - Preserves exact quoted phrases (e.g. "lsass memory").
+    - Safely isolates technical identifiers (e.g. T1059.001, CVE-2021-44228, mimikatz.exe).
+    - Joins disjunctive clauses with OR, allowing BM25 to mathematically rank term relevance
+      via inverse document frequency (IDF).
     """
     cleaned = query.strip()
     if not cleaned:
         return ""
 
-    if cleaned.startswith('"') and cleaned.endswith('"'):
-        return cleaned
+    if cleaned.startswith('"') and cleaned.endswith('"') and len(cleaned) > 2:
+        inner = cleaned[1:-1].strip().replace('"', "")
+        if inner:
+            return f'"{inner}"'
 
-    tokens = re.findall(r"[A-Za-z0-9_.-]+", cleaned)
-    if not tokens:
+    pattern = r'"([^"]+)"|(\S+)'
+    matches = re.findall(pattern, cleaned)
+
+    clauses = []
+    for quoted, word in matches:
+        if quoted:
+            clean_q = re.sub(r"[^\w\s.-]", "", quoted).strip()
+            if clean_q and any(c.isalnum() for c in clean_q):
+                clauses.append(f'"{clean_q}"')
+        elif word:
+            clean_w = re.sub(r"[^\w.-]", "", word).strip()
+            if clean_w and any(c.isalnum() for c in clean_w):
+                if len(clean_w) >= 3:
+                    clauses.append(f'"{clean_w}"*')
+                else:
+                    clauses.append(f'"{clean_w}"')
+
+    return " OR ".join(clauses)
+
+
+def _safe_json_join(val: Optional[str]) -> str:
+    """Safely decodes a JSON list of strings into a space-separated string."""
+    if not val:
         return ""
-
-    fts_tokens = []
-    for t in tokens:
-        clean_t = t.replace('"', "")
-        if clean_t:
-            if len(clean_t) >= 3:
-                fts_tokens.append(f'"{clean_t}"*')
-            else:
-                fts_tokens.append(f'"{clean_t}"')
-
-    return " ".join(fts_tokens)
+    try:
+        parsed = json.loads(val)
+        return " ".join(parsed) if isinstance(parsed, list) else str(parsed)
+    except Exception:
+        return ""
 
 
 class SparseSearchEngine:
@@ -46,11 +67,11 @@ class SparseSearchEngine:
         self._owns_conn = conn is None
         self.conn = conn if conn is not None else get_connection(self.db_path)
         self._ensure_fts_table()
-        # Warn if FTS index is empty (server started without running build_search_index.py)
+
         try:
             count = self.conn.execute("SELECT COUNT(*) FROM mitre_entities_fts").fetchone()[0]
             if count == 0:
-                print("[SparseSearchEngine] WARNING: FTS index is empty. Run 'python scripts/build_search_index.py' to populate it.")
+                print("[SparseSearchEngine] WARNING: mitre_entities_fts is empty. Call engine.build_index() to populate it.")
         except Exception:
             pass
 
@@ -58,94 +79,72 @@ class SparseSearchEngine:
         if self._owns_conn:
             self.conn.close()
 
-    def _ensure_fts_table(self):
-        """Initializes FTS5 virtual table for all MITRE entities."""
-        with self.conn:
-            self.conn.execute("""
-                CREATE VIRTUAL TABLE IF NOT EXISTS mitre_entities_fts USING fts5(
-                    entity_id,
-                    entity_type,
-                    name,
-                    aliases,
-                    tactics,
-                    platforms,
-                    description,
-                    tokenize = 'porter unicode61'
-                )
-            """)
+    def __enter__(self) -> "SparseSearchEngine":
+        return self
 
-    def build_index(self):
-        """Populates the mitre_entities_fts table with all 1,757+ MITRE entities."""
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
+
+    def _ensure_fts_table(self):
+        """Initializes FTS5 virtual table for all MITRE entities if not already created."""
+        table_exists = self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='mitre_entities_fts'"
+        ).fetchone()
+        if not table_exists:
+            with self.conn:
+                self.conn.execute("""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS mitre_entities_fts USING fts5(
+                        entity_id,
+                        entity_type,
+                        name,
+                        aliases,
+                        tactics,
+                        platforms,
+                        description,
+                        tokenize = 'porter unicode61'
+                    )
+                """)
+
+    def build_index(self) -> int:
+        """Populates the mitre_entities_fts table with all MITRE entities."""
         records = []
 
         # 1. Tactics
-        cursor = self.conn.execute("SELECT attack_id, name, shortname, description FROM tactics")
-        for r in cursor.fetchall():
+        for r in self.conn.execute("SELECT attack_id, name, shortname, description FROM tactics"):
             records.append((
-                r["attack_id"],
-                "tactic",
-                r["name"],
-                r["shortname"],
-                r["shortname"],
-                "",
-                r["description"] or "",
+                r["attack_id"], "tactic", r["name"] or "", r["shortname"] or "",
+                r["shortname"] or "", "", r["description"] or ""
             ))
 
         # 2. Techniques & Sub-techniques
-        cursor = self.conn.execute("SELECT attack_id, name, tactics_json, platforms_json, description FROM techniques")
-        for r in cursor.fetchall():
-            tactics = " ".join(json.loads(r["tactics_json"] or "[]"))
-            platforms = " ".join(json.loads(r["platforms_json"] or "[]"))
+        for r in self.conn.execute("SELECT attack_id, name, tactics_json, platforms_json, description FROM techniques"):
             records.append((
-                r["attack_id"],
-                "technique",
-                r["name"],
-                "",
-                tactics,
-                platforms,
-                r["description"] or "",
+                r["attack_id"], "technique", r["name"] or "", "",
+                _safe_json_join(r["tactics_json"]), _safe_json_join(r["platforms_json"]),
+                r["description"] or ""
             ))
 
         # 3. Mitigations
-        cursor = self.conn.execute("SELECT attack_id, name, description FROM mitigations")
-        for r in cursor.fetchall():
+        for r in self.conn.execute("SELECT attack_id, name, description FROM mitigations"):
             records.append((
-                r["attack_id"],
-                "mitigation",
-                r["name"],
-                "",
-                "",
-                "",
-                r["description"] or "",
+                r["attack_id"], "mitigation", r["name"] or "", "", "", "", r["description"] or ""
             ))
 
-        # 4. Groups (Threat Actors)
-        cursor = self.conn.execute("SELECT attack_id, name, aliases_json, description FROM groups")
-        for r in cursor.fetchall():
-            aliases = " ".join(json.loads(r["aliases_json"] or "[]"))
+        # 4. Groups
+        for r in self.conn.execute("SELECT attack_id, name, aliases_json, description FROM groups"):
             records.append((
-                r["attack_id"],
-                "group",
-                r["name"],
-                aliases,
-                "",
-                "",
-                r["description"] or "",
+                r["attack_id"], "group", r["name"] or "",
+                _safe_json_join(r["aliases_json"]), "", "", r["description"] or ""
             ))
 
-        # 5. Software (Malware & Tools)
-        cursor = self.conn.execute("SELECT attack_id, name, type, aliases_json, platforms_json, description FROM software")
-        for r in cursor.fetchall():
-            aliases = " ".join(json.loads(r["aliases_json"] or "[]"))
-            platforms = " ".join(json.loads(r["platforms_json"] or "[]"))
+        # 5. Software
+        for r in self.conn.execute("SELECT attack_id, name, type, aliases_json, platforms_json, description FROM software"):
             records.append((
-                r["attack_id"],
-                "software",
-                r["name"],
-                aliases,
-                r["type"] or "",
-                platforms,
-                r["description"] or "",
+                r["attack_id"], "software", r["name"] or "",
+                _safe_json_join(r["aliases_json"]), r["type"] or "",
+                _safe_json_join(r["platforms_json"]), r["description"] or ""
             ))
 
         with self.conn:
@@ -158,6 +157,7 @@ class SparseSearchEngine:
                 """,
                 records,
             )
+        return len(records)
 
     def search(
         self,
@@ -172,6 +172,8 @@ class SparseSearchEngine:
         fts_query = sanitize_fts_query(query)
         if not fts_query:
             return []
+
+        limit = max(1, limit)
 
         try:
             # BM25 column weights: entity_id=10.0, entity_type=0.0, name=6.0, aliases=5.0, tactics=2.0, platforms=1.0, description=1.0
@@ -208,5 +210,16 @@ class SparseSearchEngine:
                 scored.append((row["entity_id"], row["entity_type"], round(float(norm_score), 4)))
 
             return scored
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as e:
+            print(f"[SparseSearchEngine] FTS5 query warning for '{query}': {e}")
             return []
+
+    async def search_async(
+        self,
+        query: str,
+        entity_type: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Tuple[str, str, float]]:
+        """Asynchronously executes BM25 search offloaded to a threadpool worker."""
+        return await asyncio.to_thread(self.search, query, entity_type, limit)
+

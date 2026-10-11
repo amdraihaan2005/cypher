@@ -1,5 +1,11 @@
 import os
-from fastapi import FastAPI
+from contextlib import asynccontextmanager
+from typing import Dict, Optional
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
@@ -15,6 +21,44 @@ from src.api.routes import (
     search,
     intelligence,
 )
+from src.api.routes.intelligence import get_reasoning_engine
+
+from src.api.dependencies import get_repo
+
+_cached_stats: Optional[Dict[str, int]] = None
+
+
+def get_cached_statistics() -> Dict[str, int]:
+    global _cached_stats
+    if _cached_stats is None:
+        with MitreRepository() as repo:
+            _cached_stats = repo.get_statistics()
+    return _cached_stats
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        get_cached_statistics()
+    except Exception as e:
+        print(f"[Lifespan] Database initialization warning: {e}")
+
+    try:
+        engine = get_reasoning_engine()
+        # Pre-warm the FastEmbed ONNX model so the first request isn't slow.
+        # engine.search_engine.dense is the DenseSearchEngine instance.
+        _ = engine.search_engine.dense.model
+        print("[Lifespan] Core threat intelligence engine pre-warmed successfully.")
+    except Exception as e:
+        print(f"[Lifespan] Warning: Pre-warming embedding model failed: {e}")
+    yield
+
+    try:
+        search.close_hybrid_engine()
+        intelligence.close_reasoning_engine()
+        print("[Lifespan] Engines and connections closed cleanly.")
+    except Exception:
+        pass
 
 
 def create_app() -> FastAPI:
@@ -28,21 +72,21 @@ def create_app() -> FastAPI:
         version="1.0.0",
         docs_url="/docs",
         redoc_url="/redoc",
+        lifespan=lifespan,
     )
 
-    # CORS configuration for local development and public frontend (Vercel / Next.js)
     cors_raw = os.getenv("CORS_ORIGINS", "*")
-    cors_origins = ["*"] if cors_raw.strip() == "*" else [o.strip() for o in cors_raw.split(",") if o.strip()]
+    cors_origins = [o.strip() for o in cors_raw.split(",") if o.strip()]
+    is_wildcard = cors_origins == ["*"] or not cors_origins
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
+        allow_origins=["*"] if is_wildcard else cors_origins,
+        allow_credentials=False if is_wildcard else True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
-    # Mount routes
     app.include_router(stats.router)
     app.include_router(tactics.router)
     app.include_router(techniques.router)
@@ -54,20 +98,17 @@ def create_app() -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     def root():
-        """Redirect root to Swagger UI documentation."""
         return RedirectResponse(url="/docs")
 
     @app.get("/health", summary="Service Health Check", response_model=HealthResponse, tags=["System"])
-    def health_check():
-        """Check API service health and verify connectivity to the SQLite MITRE database."""
-        repo = MitreRepository()
+    def health_check(repo: MitreRepository = Depends(get_repo)):
         try:
-            counts = repo.get_statistics()
+            repo.conn.execute("SELECT 1").fetchone()
             return HealthResponse(
                 status="healthy",
                 version="1.0.0",
                 database_connected=True,
-                statistics=counts,
+                statistics=get_cached_statistics(),
             )
         except Exception as e:
             return HealthResponse(
@@ -76,20 +117,6 @@ def create_app() -> FastAPI:
                 database_connected=False,
                 statistics={},
             )
-        finally:
-            repo.close()
-
-    @app.on_event("startup")
-    def preload_models():
-        """Pre-warm the embedding model on startup so the first query isn't slow."""
-        try:
-            from src.search.dense import DenseSearchEngine
-            engine = DenseSearchEngine()
-            # Trigger lazy model load by accessing the property
-            _ = engine.model
-            print("[Startup] Embedding model pre-loaded successfully.")
-        except Exception as e:
-            print(f"[Startup] Warning: Could not pre-load embedding model: {e}")
 
     return app
 

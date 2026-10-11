@@ -1,9 +1,9 @@
-import React from 'react';
+import React, { memo, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Target, ShieldCheck, Users, Wrench, ChevronRight, Sparkles } from 'lucide-react';
+import { Target, ShieldCheck, Users, Wrench, Sparkles } from 'lucide-react';
 
-export default function AnalysisResult({ report, onSelectEntity }) {
+const AnalysisResult = memo(function AnalysisResult({ report, onSelectEntity }) {
   if (!report) return null;
 
   const techniques = report.identified_techniques || [];
@@ -13,10 +13,20 @@ export default function AnalysisResult({ report, onSelectEntity }) {
   const aiAnswer = report.ai_answer;
   const aiModel = report.ai_model || 'openai/gpt-oss-120b';
 
-  return (
-    <div className="results-container">
-      {/* 1. Direct AI Answer Card */}
-      {aiAnswer && (
+  const renderedMarkdown = useMemo(() => {
+    if (!aiAnswer) return null;
+    return (
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        {aiAnswer}
+      </ReactMarkdown>
+    );
+  }, [aiAnswer]);
+
+  const hasEntities = techniques.length > 0 || mitigations.length > 0 || groups.length > 0 || software.length > 0;
+
+  if (!aiAnswer && !hasEntities) {
+    return (
+      <div className="results-container">
         <section className="result-section ai-answer-card">
           <div className="section-header">
             <div className="section-title" style={{ color: '#38bdf8' }}>
@@ -27,13 +37,35 @@ export default function AnalysisResult({ report, onSelectEntity }) {
               {aiModel}
             </span>
           </div>
-          <div className="ai-answer-body markdown-content">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {aiAnswer}
-            </ReactMarkdown>
+          <div className="ai-answer-body markdown-content" style={{ color: 'var(--text-secondary)' }}>
+            <p>I am ready to assist with MITRE ATT&amp;CK intelligence. Describe an observed threat activity, attack vector, or technique ID to generate an intelligence profile.</p>
           </div>
         </section>
-      )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="results-container">
+      {/* 1. Direct AI Answer Card */}
+      <section className="result-section ai-answer-card">
+        <div className="section-header">
+          <div className="section-title" style={{ color: '#38bdf8' }}>
+            <Sparkles size={16} />
+            <span>Cypher AI Intelligence Profile</span>
+          </div>
+          <span className="badge-count" style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8' }}>
+            {aiModel}
+          </span>
+        </div>
+        <div className="ai-answer-body markdown-content">
+          {renderedMarkdown || (
+            <p style={{ color: 'var(--text-secondary)' }}>
+              Analysis complete. Retrieved {techniques.length} technique(s), {mitigations.length} mitigation(s), and {groups.length} threat actor(s) from the MITRE ATT&amp;CK knowledge graph.
+            </p>
+          )}
+        </div>
+      </section>
 
       {/* 2. Unified Entity Meta Pills (Techniques, Mitigations, Threat Actors, Tools/Malware) */}
       {(techniques.length > 0 || mitigations.length > 0 || groups.length > 0 || software.length > 0) && (
@@ -51,7 +83,15 @@ export default function AnalysisResult({ report, onSelectEntity }) {
                     key={id || idx}
                     className="sw-pill"
                     style={{ cursor: 'pointer' }}
-                    onClick={() => onSelectEntity(id, 'technique')}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onSelectEntity?.(id, 'technique')}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onSelectEntity?.(id, 'technique');
+                      }
+                    }}
                     title="Click to inspect technique"
                   >
                     <strong style={{ color: '#38bdf8', marginRight: '4px' }}>{id}</strong>
@@ -76,7 +116,15 @@ export default function AnalysisResult({ report, onSelectEntity }) {
                     key={id || idx}
                     className="sw-pill"
                     style={{ cursor: 'pointer' }}
-                    onClick={() => onSelectEntity(id, 'mitigation')}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onSelectEntity?.(id, 'mitigation')}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onSelectEntity?.(id, 'mitigation');
+                      }
+                    }}
                     title="Click to inspect mitigation"
                   >
                     <strong style={{ color: '#34d399', marginRight: '4px' }}>{id}</strong>
@@ -101,7 +149,15 @@ export default function AnalysisResult({ report, onSelectEntity }) {
                     key={id || idx}
                     className="sw-pill"
                     style={{ cursor: 'pointer' }}
-                    onClick={() => onSelectEntity(id, 'group')}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onSelectEntity?.(id, 'group')}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onSelectEntity?.(id, 'group');
+                      }
+                    }}
                     title="Click to inspect group"
                   >
                     <strong style={{ color: '#f59e0b', marginRight: '4px' }}>{id}</strong>
@@ -126,7 +182,15 @@ export default function AnalysisResult({ report, onSelectEntity }) {
                     key={id || idx}
                     className="sw-pill"
                     style={{ cursor: 'pointer' }}
-                    onClick={() => onSelectEntity(id, 'software')}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onSelectEntity?.(id, 'software')}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onSelectEntity?.(id, 'software');
+                      }
+                    }}
                     title="Click to inspect software"
                   >
                     <strong style={{ color: '#a78bfa', marginRight: '4px' }}>{id}</strong>
@@ -140,5 +204,7 @@ export default function AnalysisResult({ report, onSelectEntity }) {
       )}
     </div>
   );
-}
+});
+
+export default AnalysisResult;
 

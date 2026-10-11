@@ -26,7 +26,22 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA temp_store = MEMORY")
+    conn.execute("PRAGMA mmap_size = 268435456")
     return conn
+
+
+def _safe_json_list(raw: Optional[str]) -> List[str]:
+    """Safely deserializes a JSON string into a list of strings."""
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
 
 
 def init_db(conn: sqlite3.Connection):
@@ -298,8 +313,18 @@ class MitreRepository:
         self.db_path = db_path or DEFAULT_DB_PATH
         self.conn = get_connection(self.db_path)
 
+    def __enter__(self) -> "MitreRepository":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
     def close(self):
-        self.conn.close()
+        try:
+            self.conn.close()
+        except Exception:
+            pass
 
     def _row_to_technique(self, row: sqlite3.Row) -> TechniqueItem:
         return TechniqueItem(
@@ -309,9 +334,9 @@ class MitreRepository:
             description=row["description"] or "",
             is_subtechnique=bool(row["is_subtechnique"]),
             parent_attack_id=row["parent_attack_id"],
-            tactics=json.loads(row["tactics_json"] or "[]"),
-            platforms=json.loads(row["platforms_json"] or "[]"),
-            data_sources=json.loads(row["data_sources_json"] or "[]"),
+            tactics=_safe_json_list(row["tactics_json"]),
+            platforms=_safe_json_list(row["platforms_json"]),
+            data_sources=_safe_json_list(row["data_sources_json"]),
             detection=row["detection"],
             url=row["url"],
         )
@@ -343,16 +368,7 @@ class MitreRepository:
             """,
             (clean_id,),
         )
-        mitigations = [
-            MitigationItem(
-                stix_id=r["stix_id"],
-                attack_id=r["attack_id"],
-                name=r["name"],
-                description=r["description"] or "",
-                url=r["url"],
-            )
-            for r in mit_cursor.fetchall()
-        ]
+        mitigations = [self._row_to_mitigation(r) for r in mit_cursor.fetchall()]
 
         # Threat Groups
         grp_cursor = self.conn.execute(
@@ -364,17 +380,7 @@ class MitreRepository:
             """,
             (clean_id,),
         )
-        groups = [
-            GroupItem(
-                stix_id=r["stix_id"],
-                attack_id=r["attack_id"],
-                name=r["name"],
-                aliases=json.loads(r["aliases_json"] or "[]"),
-                description=r["description"] or "",
-                url=r["url"],
-            )
-            for r in grp_cursor.fetchall()
-        ]
+        groups = [self._row_to_group(r) for r in grp_cursor.fetchall()]
 
         # Software
         sw_cursor = self.conn.execute(
@@ -386,19 +392,7 @@ class MitreRepository:
             """,
             (clean_id,),
         )
-        software = [
-            SoftwareItem(
-                stix_id=r["stix_id"],
-                attack_id=r["attack_id"],
-                name=r["name"],
-                type=r["type"] or "software",
-                aliases=json.loads(r["aliases_json"] or "[]"),
-                platforms=json.loads(r["platforms_json"] or "[]"),
-                description=r["description"] or "",
-                url=r["url"],
-            )
-            for r in sw_cursor.fetchall()
-        ]
+        software = [self._row_to_software(r) for r in sw_cursor.fetchall()]
 
         return TechniqueDetail(
             technique=tech,
@@ -432,7 +426,7 @@ class MitreRepository:
             stix_id=row["stix_id"],
             attack_id=row["attack_id"],
             name=row["name"],
-            aliases=json.loads(row["aliases_json"] or "[]"),
+            aliases=_safe_json_list(row["aliases_json"]),
             description=row["description"] or "",
             url=row["url"],
         )
@@ -443,11 +437,12 @@ class MitreRepository:
             attack_id=row["attack_id"],
             name=row["name"],
             type=row["type"] or "software",
-            aliases=json.loads(row["aliases_json"] or "[]"),
-            platforms=json.loads(row["platforms_json"] or "[]"),
+            aliases=_safe_json_list(row["aliases_json"]),
+            platforms=_safe_json_list(row["platforms_json"]),
             description=row["description"] or "",
             url=row["url"],
         )
+
 
     def list_tactics(self) -> List[TacticItem]:
         cursor = self.conn.execute("SELECT * FROM tactics ORDER BY attack_id")
@@ -475,7 +470,8 @@ class MitreRepository:
         platform: Optional[str] = None,
         is_subtechnique: Optional[bool] = None,
     ) -> Tuple[List[TechniqueItem], int]:
-        """Paginated techniques lookup with optional filtering by tactic, platform, sub-technique."""
+        limit = max(1, limit)
+        offset = max(0, offset)
         conditions = []
         params = []
         joins = []
@@ -541,6 +537,8 @@ class MitreRepository:
         return [self._row_to_technique(r) for r in cursor.fetchall()]
 
     def list_mitigations(self, limit: int = 50, offset: int = 0) -> Tuple[List[MitigationItem], int]:
+        limit = max(1, limit)
+        offset = max(0, offset)
         total = self.conn.execute("SELECT COUNT(*) FROM mitigations").fetchone()[0]
         cursor = self.conn.execute(
             "SELECT * FROM mitigations ORDER BY attack_id LIMIT ? OFFSET ?",
@@ -569,6 +567,8 @@ class MitreRepository:
         return MitigationDetail(mitigation=mitigation, techniques=techniques)
 
     def list_groups(self, limit: int = 50, offset: int = 0) -> Tuple[List[GroupItem], int]:
+        limit = max(1, limit)
+        offset = max(0, offset)
         total = self.conn.execute("SELECT COUNT(*) FROM groups").fetchone()[0]
         cursor = self.conn.execute(
             "SELECT * FROM groups ORDER BY attack_id LIMIT ? OFFSET ?",
@@ -614,6 +614,8 @@ class MitreRepository:
         type: Optional[str] = None,
         platform: Optional[str] = None,
     ) -> Tuple[List[SoftwareItem], int]:
+        limit = max(1, limit)
+        offset = max(0, offset)
         conditions = []
         params = []
         if type:
@@ -665,7 +667,11 @@ class MitreRepository:
 
     def search_techniques(self, query: str, limit: int = 20) -> List[TechniqueItem]:
         """Prefix/keyword search across attack_id and name."""
-        pattern = f"%{query.strip()}%"
+        if not query or not query.strip():
+            return []
+        limit = max(1, limit)
+        clean_query = query.strip()
+        pattern = f"%{clean_query}%"
         cursor = self.conn.execute(
             """
             SELECT * FROM techniques
@@ -679,17 +685,27 @@ class MitreRepository:
 
     def search_all(self, query: str, limit: int = 10) -> Dict[str, Any]:
         """Unified search across techniques, groups, and software."""
-        pattern = f"%{query.strip()}%"
+        if not query or not query.strip():
+            return {
+                "query": query,
+                "techniques": [],
+                "groups": [],
+                "software": [],
+            }
+        limit = max(1, limit)
+        clean_query = query.strip()
+        pattern = f"%{clean_query}%"
         
-        techs = self.search_techniques(query, limit=limit)
+        techs = self.search_techniques(clean_query, limit=limit)
         
         grp_cursor = self.conn.execute(
             """
             SELECT * FROM groups
             WHERE attack_id LIKE ? OR name LIKE ? OR aliases_json LIKE ?
+            ORDER BY (CASE WHEN attack_id LIKE ? THEN 0 ELSE 1 END), attack_id
             LIMIT ?
             """,
-            (pattern, pattern, pattern, limit),
+            (pattern, pattern, pattern, pattern, limit),
         )
         groups = [self._row_to_group(r) for r in grp_cursor.fetchall()]
 
@@ -697,9 +713,10 @@ class MitreRepository:
             """
             SELECT * FROM software
             WHERE attack_id LIKE ? OR name LIKE ? OR aliases_json LIKE ?
+            ORDER BY (CASE WHEN attack_id LIKE ? THEN 0 ELSE 1 END), attack_id
             LIMIT ?
             """,
-            (pattern, pattern, pattern, limit),
+            (pattern, pattern, pattern, pattern, limit),
         )
         software = [self._row_to_software(r) for r in sw_cursor.fetchall()]
 
@@ -711,18 +728,28 @@ class MitreRepository:
         }
 
     def get_statistics(self) -> Dict[str, int]:
-        counts = {}
-        for table in [
-            "tactics",
-            "techniques",
-            "mitigations",
-            "groups",
-            "software",
-            "technique_mitigations",
-            "group_techniques",
-            "software_techniques",
-            "group_software",
-        ]:
-            c = self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            counts[table] = c
-        return counts
+        row = self.conn.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM tactics) AS tactics,
+                (SELECT COUNT(*) FROM techniques) AS techniques,
+                (SELECT COUNT(*) FROM mitigations) AS mitigations,
+                (SELECT COUNT(*) FROM groups) AS groups,
+                (SELECT COUNT(*) FROM software) AS software,
+                (SELECT COUNT(*) FROM technique_mitigations) AS technique_mitigations,
+                (SELECT COUNT(*) FROM group_techniques) AS group_techniques,
+                (SELECT COUNT(*) FROM software_techniques) AS software_techniques,
+                (SELECT COUNT(*) FROM group_software) AS group_software
+            """
+        ).fetchone()
+        return dict(row)
+
+
+__all__ = [
+    "DEFAULT_DB_PATH",
+    "get_connection",
+    "init_db",
+    "populate_db",
+    "MitreRepository",
+]
+

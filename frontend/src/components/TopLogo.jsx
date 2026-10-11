@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { Shield } from 'lucide-react';
 
-export default function TopLogo() {
+const TopLogo = memo(function TopLogo() {
   return (
     <header className="top-header">
       <div className="brand-logo">
@@ -11,4 +11,6 @@ export default function TopLogo() {
       <div className="brand-sub">MITRE ATT&amp;CK Intelligence Engine</div>
     </header>
   );
-}
+});
+
+export default TopLogo;

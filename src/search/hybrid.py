@@ -1,13 +1,9 @@
-from typing import List, Dict, Any, Optional, Union, Tuple
-from pydantic import BaseModel, Field
+import asyncio
+from typing import List, Dict, Any, Optional, Union, Tuple, Set
+from pydantic import BaseModel, ConfigDict
 
 from src.mitre.db import MitreRepository
 from src.mitre.schema import (
-    TechniqueItem,
-    TacticItem,
-    MitigationItem,
-    GroupItem,
-    SoftwareItem,
     TechniqueDetail,
     TacticDetail,
     MitigationDetail,
@@ -16,9 +12,29 @@ from src.mitre.schema import (
 )
 from src.search.sparse import SparseSearchEngine
 from src.search.dense import DenseSearchEngine
+from src.search.rrf import reciprocal_rank_fusion
+
+ALLOWED_ENTITY_TYPES: Set[str] = {"technique", "group", "software", "mitigation", "tactic"}
+MIN_CANDIDATE_POOL_DEPTH: int = 60
+
+
+def _min_max_scale(scores: Dict[Tuple[str, str], float]) -> Dict[Tuple[str, str], float]:
+    """
+    Normalizes a dictionary of scores to a standard 0.0 - 1.0 range.
+    Prevents unbounded sparse BM25 scores from overpowering bounded dense scores.
+    """
+    if not scores:
+        return {}
+    vals = list(scores.values())
+    min_v, max_v = min(vals), max(vals)
+    if max_v <= min_v:
+        return {k: 1.0 for k in scores}
+    return {k: (v - min_v) / (max_v - min_v) for k, v in scores.items()}
 
 
 class ScoredEntity(BaseModel):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
     entity_id: str
     entity_type: str  # 'technique', 'tactic', 'mitigation', 'group', 'software'
     name: str
@@ -30,8 +46,9 @@ class ScoredEntity(BaseModel):
 
 class HybridSearchEngine:
     """
-    Coordinates Dense and Sparse search across ALL MITRE ATT&CK entities:
-    Tactics, Techniques, Mitigations, Adversary Groups, and Software/Malware.
+    Coordinates Dense (semantic vector) and Sparse (BM25 keyword) search
+    across ALL MITRE ATT&CK entities: Tactics, Techniques, Mitigations,
+    Adversary Groups, and Software/Tools.
     """
 
     def __init__(
@@ -40,40 +57,111 @@ class HybridSearchEngine:
         dense_engine: Optional[DenseSearchEngine] = None,
         repo: Optional[MitreRepository] = None,
     ):
+        self._owns_repo = repo is None
+        self._owns_sparse = sparse_engine is None
+
         self.repo = repo or MitreRepository()
-        # Share the repo's SQLite connection with SparseSearchEngine to avoid multiple connections
         self.sparse = sparse_engine or SparseSearchEngine(conn=self.repo.conn)
         self.dense = dense_engine or DenseSearchEngine()
 
+    def __enter__(self) -> "HybridSearchEngine":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
     def close(self):
-        self.sparse.close()
-        self.repo.close()
+        """Safely closes owned connections without destroying externally injected dependencies."""
+        if self._owns_sparse:
+            self.sparse.close()
+        if self._owns_repo:
+            self.repo.close()
 
-    def _hydrate_entity(self, entity_id: str, entity_type: str) -> Tuple[str, Any]:
-        """Resolves full entity details and returns (name, detail_object)."""
-        clean_type = entity_type.lower()
-        if clean_type == "technique":
-            detail = self.repo.get_technique(entity_id)
-            if detail:
-                return detail.technique.name, detail
-        elif clean_type == "group":
-            detail = self.repo.get_group(entity_id)
-            if detail:
-                return detail.group.name, detail
-        elif clean_type == "software":
-            detail = self.repo.get_software(entity_id)
-            if detail:
-                return detail.software.name, detail
-        elif clean_type == "mitigation":
-            detail = self.repo.get_mitigation(entity_id)
-            if detail:
-                return detail.mitigation.name, detail
-        elif clean_type == "tactic":
-            detail = self.repo.get_tactic(entity_id)
-            if detail:
-                return detail.tactic.name, detail
 
-        return entity_id, None
+    def _batch_hydrate(
+        self, candidates: List[Dict[str, Any]]
+    ) -> Dict[Tuple[str, str], Tuple[str, Any]]:
+        """
+        Batch hydrates entity names and details by grouping candidates by entity_type
+        and executing single SQL queries using WHERE attack_id IN (...).
+        Eliminates the N+1 query loop.
+        """
+        by_type: Dict[str, Set[str]] = {}
+        for c in candidates:
+            clean_type = c["entity_type"].lower().strip()
+            if clean_type not in ALLOWED_ENTITY_TYPES:
+                raise ValueError(
+                    f"Unrecognized entity_type: '{c['entity_type']}' for candidate '{c['entity_id']}'. "
+                    f"Expected one of: {sorted(list(ALLOWED_ENTITY_TYPES))}"
+                )
+            by_type.setdefault(clean_type, set()).add(c["entity_id"].strip().upper())
+
+        hydrated: Dict[Tuple[str, str], Tuple[str, Any]] = {}
+
+        for etype, ids in by_type.items():
+            if not ids:
+                continue
+            placeholders = ",".join(["?"] * len(ids))
+            id_tuple = tuple(ids)
+
+            if etype == "technique":
+                cursor = self.repo.conn.execute(
+                    f"SELECT * FROM techniques WHERE attack_id IN ({placeholders})",
+                    id_tuple,
+                )
+                for r in cursor.fetchall():
+                    tech = self.repo._row_to_technique(r)
+                    detail = TechniqueDetail(
+                        technique=tech,
+                        subtechniques=[],
+                        mitigations=[],
+                        groups=[],
+                        software=[],
+                    )
+                    hydrated[(r["attack_id"].upper(), "technique")] = (tech.name, detail)
+
+            elif etype == "group":
+                cursor = self.repo.conn.execute(
+                    f"SELECT * FROM groups WHERE attack_id IN ({placeholders})",
+                    id_tuple,
+                )
+                for r in cursor.fetchall():
+                    grp = self.repo._row_to_group(r)
+                    detail = GroupDetail(group=grp, techniques=[], software=[])
+                    hydrated[(r["attack_id"].upper(), "group")] = (grp.name, detail)
+
+            elif etype == "software":
+                cursor = self.repo.conn.execute(
+                    f"SELECT * FROM software WHERE attack_id IN ({placeholders})",
+                    id_tuple,
+                )
+                for r in cursor.fetchall():
+                    sw = self.repo._row_to_software(r)
+                    detail = SoftwareDetail(software=sw, techniques=[], groups=[])
+                    hydrated[(r["attack_id"].upper(), "software")] = (sw.name, detail)
+
+            elif etype == "mitigation":
+                cursor = self.repo.conn.execute(
+                    f"SELECT * FROM mitigations WHERE attack_id IN ({placeholders})",
+                    id_tuple,
+                )
+                for r in cursor.fetchall():
+                    mit = self.repo._row_to_mitigation(r)
+                    detail = MitigationDetail(mitigation=mit, techniques=[])
+                    hydrated[(r["attack_id"].upper(), "mitigation")] = (mit.name, detail)
+
+            elif etype == "tactic":
+                cursor = self.repo.conn.execute(
+                    f"SELECT * FROM tactics WHERE attack_id IN ({placeholders})",
+                    id_tuple,
+                )
+                for r in cursor.fetchall():
+                    tac = self.repo._row_to_tactic(r)
+                    detail = TacticDetail(tactic=tac, techniques=[])
+                    hydrated[(r["attack_id"].upper(), "tactic")] = (tac.name, detail)
+
+        return hydrated
 
     def search(
         self,
@@ -83,8 +171,9 @@ class HybridSearchEngine:
         mode: str = "rrf",
         hydrate: bool = True,
         k: int = 60,
-        min_dense_score: float = 0.55,
+        min_dense_score: Optional[float] = None,
         alpha: float = 0.6,
+        rrf_weights: Optional[Dict[str, float]] = None,
     ) -> Union[List[ScoredEntity], List[Tuple[str, str, float]]]:
         """
         Unified search across all MITRE ATT&CK entities (tactics, techniques, mitigations, groups, software).
@@ -93,19 +182,23 @@ class HybridSearchEngine:
             query: The search term, ID, keyword, or natural language query.
             entity_type: Optional entity filter ('technique', 'tactic', 'mitigation', 'group', 'software').
             limit: Maximum candidates to return.
-            mode: Search strategy:
-                - 'rrf' (default): Reciprocal Rank Fusion fusing dense and sparse channels.
-                - 'dense': Pure semantic vector embedding cosine search.
-                - 'sparse': Pure BM25 token keyword search via SQLite FTS5.
-                - 'hybrid': Linear combination (alpha * dense + (1 - alpha) * sparse).
-            hydrate: If True, fetches full entity metadata and returns List[ScoredEntity].
+            mode: Search strategy ('rrf', 'dense', 'sparse', 'hybrid'/'linear').
+            hydrate: If True, executes batch SQL queries and returns List[ScoredEntity].
                      If False, returns lightweight List[Tuple[entity_id, entity_type, score]].
             k: Smoothing constant for RRF ranking (default: 60).
-            min_dense_score: Minimum similarity threshold for dense matches in RRF.
+            min_dense_score: Minimum similarity threshold for dense matches.
             alpha: Weight for dense matches in linear hybrid mode (0.0 to 1.0).
+            rrf_weights: Optional dictionary of weights for RRF channels (e.g. {'dense': 1.2, 'sparse': 0.8}).
         """
-        clean_mode = mode.lower()
+        if not query.strip():
+            return []
+
+        clean_mode = mode.lower().strip()
+        limit = max(1, limit)
+        alpha = max(0.0, min(1.0, alpha))
+        k = max(1, k)
         candidates: List[Dict[str, Any]] = []
+        deep_pool = max(limit * 3, MIN_CANDIDATE_POOL_DEPTH)
 
         if clean_mode == "sparse":
             sparse_hits = self.sparse.search(query, entity_type=entity_type, limit=limit)
@@ -119,7 +212,8 @@ class HybridSearchEngine:
                 })
 
         elif clean_mode == "dense":
-            dense_hits = self.dense.search(query, entity_type=entity_type, limit=limit)
+            dense_threshold = min_dense_score if min_dense_score is not None else 0.0
+            dense_hits = self.dense.search(query, entity_type=entity_type, limit=limit, min_score=dense_threshold)
             for eid, etype, d_score in dense_hits:
                 candidates.append({
                     "entity_id": eid,
@@ -130,32 +224,41 @@ class HybridSearchEngine:
                 })
 
         elif clean_mode in ("hybrid", "linear"):
-            dense_hits_raw = self.dense.search(query, entity_type=entity_type, limit=limit * 2)
-            sparse_hits_raw = self.sparse.search(query, entity_type=entity_type, limit=limit * 2)
+            # Deep retrieval to ensure both algorithms explore sufficient candidate overlap
+            dense_hits_raw = self.dense.search(query, entity_type=entity_type, limit=deep_pool)
+            sparse_hits_raw = self.sparse.search(query, entity_type=entity_type, limit=deep_pool)
 
             dense_map = {(eid, etype): s for eid, etype, s in dense_hits_raw}
             sparse_map = {(eid, etype): s for eid, etype, s in sparse_hits_raw}
 
+            # Normalize both distributions to [0.0, 1.0] before applying linear weights
+            norm_dense = _min_max_scale(dense_map)
+            norm_sparse = _min_max_scale(sparse_map)
+
             all_keys = set(dense_map.keys()) | set(sparse_map.keys())
             for eid, etype in all_keys:
-                d_score = dense_map.get((eid, etype), 0.0)
-                s_score = sparse_map.get((eid, etype), 0.0)
-                final_score = (alpha * d_score) + ((1.0 - alpha) * s_score)
+                d_norm = norm_dense.get((eid, etype), 0.0)
+                s_norm = norm_sparse.get((eid, etype), 0.0)
+                final_score = (alpha * d_norm) + ((1.0 - alpha) * s_norm)
                 candidates.append({
                     "entity_id": eid,
                     "entity_type": etype,
                     "score": round(final_score, 4),
-                    "dense_score": round(d_score, 4),
-                    "sparse_score": round(s_score, 4),
+                    "dense_score": round(dense_map.get((eid, etype), 0.0), 4),
+                    "sparse_score": round(sparse_map.get((eid, etype), 0.0), 4),
                 })
             candidates.sort(key=lambda x: x["score"], reverse=True)
             candidates = candidates[:limit]
 
         else:  # default: "rrf"
-            from src.search.rrf import reciprocal_rank_fusion
-
-            dense_hits = self.dense.search(query, entity_type=entity_type, limit=limit * 3, min_score=min_dense_score)
-            sparse_hits = self.sparse.search(query, entity_type=entity_type, limit=limit * 3)
+            # Deep retrieval: consensus ranking requires a broad pool of candidates
+            dense_threshold = min_dense_score if min_dense_score is not None else 0.55
+            dense_hits = self.dense.search(
+                query, entity_type=entity_type, limit=deep_pool, min_score=dense_threshold
+            )
+            sparse_hits = self.sparse.search(
+                query, entity_type=entity_type, limit=deep_pool
+            )
 
             if dense_hits or sparse_hits:
                 dense_list = [((eid, etype), score) for eid, etype, score in dense_hits]
@@ -169,7 +272,7 @@ class HybridSearchEngine:
                     ("sparse", sparse_list),
                 ]
 
-                fused = reciprocal_rank_fusion(ranked_lists, k=k)
+                fused = reciprocal_rank_fusion(ranked_lists, k=k, weights=rrf_weights)
                 for (eid, etype), rrf_score, _ranks in fused[:limit]:
                     candidates.append({
                         "entity_id": eid,
@@ -179,14 +282,17 @@ class HybridSearchEngine:
                         "sparse_score": sparse_score_map.get((eid, etype)),
                     })
 
-        # Early return for lightweight ID tuples (skips SQLite entity hydration)
+        # Early return for lightweight ID tuples (skips SQLite entity hydration entirely)
         if not hydrate:
             return [(c["entity_id"], c["entity_type"], c["score"]) for c in candidates]
 
-        # Hydrate full entity models
+        # Batch hydration: executes grouped batch queries (max 5 queries) instead of an N+1 loop
+        hydrated_map = self._batch_hydrate(candidates)
+
         results: List[ScoredEntity] = []
         for c in candidates:
-            name, detail = self._hydrate_entity(c["entity_id"], c["entity_type"])
+            key = (c["entity_id"].strip().upper(), c["entity_type"].lower().strip())
+            name, detail = hydrated_map.get(key, (c["entity_id"], None))
             results.append(
                 ScoredEntity(
                     entity_id=c["entity_id"],
@@ -201,4 +307,32 @@ class HybridSearchEngine:
 
         return results
 
+    async def search_async(
+        self,
+        query: str,
+        entity_type: Optional[str] = None,
+        limit: int = 20,
+        mode: str = "rrf",
+        hydrate: bool = True,
+        k: int = 60,
+        min_dense_score: Optional[float] = None,
+        alpha: float = 0.6,
+        rrf_weights: Optional[Dict[str, float]] = None,
+    ) -> Union[List[ScoredEntity], List[Tuple[str, str, float]]]:
+        """
+        Asynchronously executes unified search by offloading retrieval,
+        embedding inference, and batch hydration to a threadpool worker.
+        """
+        return await asyncio.to_thread(
+            self.search,
+            query,
+            entity_type,
+            limit,
+            mode,
+            hydrate,
+            k,
+            min_dense_score,
+            alpha,
+            rrf_weights,
+        )
 

@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { Plus, Trash2, MessageSquare, ChevronLeft, ChevronRight } from 'lucide-react';
 
-export default function Sidebar({
+const Sidebar = memo(function Sidebar({
   isOpen,
   onToggle,
   threads,
@@ -16,29 +16,38 @@ export default function Sidebar({
       {/* Toggle button on the top left if collapsed */}
       {!isOpen && (
         <button
+          type="button"
           className="sidebar-toggle-btn"
           onClick={onToggle}
           title="Open Threads"
           aria-label="Open Threads"
+          aria-expanded={false}
+          aria-controls="threads-sidebar"
         >
           <ChevronRight size={18} />
         </button>
       )}
 
-      <aside className={`sidebar ${isOpen ? '' : 'collapsed'}`}>
+      <aside
+        id="threads-sidebar"
+        className={`sidebar ${isOpen ? '' : 'collapsed'}`}
+        aria-label="Conversation Threads"
+      >
         <div className="sidebar-header">
           <span className="sidebar-title">Threads</span>
           <button
+            type="button"
             onClick={onToggle}
             className="modal-close-btn"
             title="Collapse Sidebar"
             aria-label="Collapse Sidebar"
+            aria-expanded={true}
           >
             <ChevronLeft size={18} />
           </button>
         </div>
 
-        <button className="new-query-btn" onClick={onNewThread}>
+        <button type="button" className="new-query-btn" onClick={onNewThread}>
           <Plus size={16} />
           <span>New Thread</span>
         </button>
@@ -60,12 +69,14 @@ export default function Sidebar({
                   {thread.title}
                 </span>
                 <button
+                  type="button"
                   className="history-delete-btn"
                   onClick={(e) => {
                     e.stopPropagation();
                     onDeleteThread(thread.id);
                   }}
                   title="Delete thread"
+                  aria-label={`Delete thread: ${thread.title}`}
                 >
                   <Trash2 size={13} />
                 </button>
@@ -78,6 +89,7 @@ export default function Sidebar({
           <div className="sidebar-footer">
             <span>{threads.length} {threads.length === 1 ? 'thread' : 'threads'}</span>
             <button
+              type="button"
               onClick={onClearThreads}
               style={{ color: 'var(--text-muted)', fontSize: '11px' }}
               onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--danger)')}
@@ -90,4 +102,6 @@ export default function Sidebar({
       </aside>
     </>
   );
-}
+});
+
+export default Sidebar;

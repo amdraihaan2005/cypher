@@ -1,27 +1,53 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, memo } from 'react';
 import { X, ExternalLink } from 'lucide-react';
 import { getEntityDetail } from '../api';
 
-export default function EntityModal({ entityId, entityType, onClose }) {
+const EntityModal = memo(function EntityModal({ entityId, entityType, onClose }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     if (!entityId) return;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
 
-    getEntityDetail(entityId, entityType)
+    getEntityDetail(entityId, entityType, { signal: controller.signal })
       .then((res) => {
         setData(res);
         setLoading(false);
       })
       .catch((err) => {
-        setError(err.message);
+        if (controller.signal.aborted || err?.status === 499) {
+          return;
+        }
+        setError(err.message || 'Failed to load entity details');
         setLoading(false);
       });
+
+    return () => {
+      controller.abort();
+    };
   }, [entityId, entityType]);
+
+  // Handle Escape key listener and body scroll lock
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        onClose?.();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [onClose]);
 
   const getMitreUrl = () => {
     if (!entityId) return null;
@@ -53,16 +79,22 @@ export default function EntityModal({ entityId, entityType, onClose }) {
   const entity = data?.technique || data?.mitigation || data?.group || data?.software || data?.tactic || data;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div
+      className="modal-overlay"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="modal-entity-title"
+    >
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div>
             <div className="modal-type-badge">{entityType || 'MITRE ATT&CK'}</div>
-            <h3 className="modal-title">
+            <h3 id="modal-entity-title" className="modal-title">
               {entity?.name || entityId}
             </h3>
           </div>
-          <button className="modal-close-btn" onClick={onClose} aria-label="Close modal">
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close modal" type="button">
             <X size={18} />
           </button>
         </div>
@@ -95,6 +127,15 @@ export default function EntityModal({ entityId, entityType, onClose }) {
                   <span style={{ textTransform: 'capitalize', color: 'var(--text-primary)' }}>
                     {entity.type}
                   </span>
+                </div>
+              )}
+
+              {entity.description && (
+                <div className="modal-field-group">
+                  <span className="modal-field-label">Description</span>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '13px', lineHeight: 1.6, marginTop: '2px', whiteSpace: 'pre-wrap' }}>
+                    {entity.description}
+                  </p>
                 </div>
               )}
 
@@ -150,5 +191,7 @@ export default function EntityModal({ entityId, entityType, onClose }) {
       </div>
     </div>
   );
-}
+});
+
+export default EntityModal;
 

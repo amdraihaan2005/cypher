@@ -17,8 +17,14 @@ def get_hybrid_engine() -> HybridSearchEngine:
     return _hybrid_engine
 
 
-def get_repo() -> MitreRepository:
-    return MitreRepository()
+from src.api.dependencies import get_repo
+
+
+def close_hybrid_engine():
+    global _hybrid_engine
+    if _hybrid_engine is not None:
+        _hybrid_engine.close()
+        _hybrid_engine = None
 
 
 @router.get("", summary="Fast Unified Entity Search", response_model=SearchResponse)
@@ -28,16 +34,13 @@ def search(
     repo: MitreRepository = Depends(get_repo),
 ):
     """Searches techniques, adversary groups, and malware/software tools for the given keyword."""
-    try:
-        results = repo.search_all(query=q, limit=limit)
-        return SearchResponse(
-            query=q,
-            techniques=results["techniques"],
-            groups=results["groups"],
-            software=results["software"],
-        )
-    finally:
-        repo.close()
+    results = repo.search_all(query=q, limit=limit)
+    return SearchResponse(
+        query=q,
+        techniques=results["techniques"],
+        groups=results["groups"],
+        software=results["software"],
+    )
 
 
 def _format_search_response(

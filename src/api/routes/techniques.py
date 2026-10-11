@@ -4,12 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Path
 from src.mitre.db import MitreRepository
 from src.mitre.schema import TechniqueItem, TechniqueDetail
 from src.api.schemas import PaginatedResponse
+from src.api.dependencies import get_repo
 
 router = APIRouter(prefix="/api/techniques", tags=["Techniques"])
-
-
-def get_repo() -> MitreRepository:
-    return MitreRepository()
 
 
 @router.get("", summary="List & filter MITRE ATT&CK Techniques", response_model=PaginatedResponse[TechniqueItem])
@@ -22,23 +19,20 @@ def list_techniques(
     repo: MitreRepository = Depends(get_repo),
 ):
     """Retrieve paginated techniques with optional filtering by tactic, platform, or subtechnique."""
-    try:
-        items, total = repo.list_techniques(
-            limit=limit,
-            offset=offset,
-            tactic=tactic,
-            platform=platform,
-            is_subtechnique=is_subtechnique,
-        )
-        return PaginatedResponse(
-            items=items,
-            total=total,
-            limit=limit,
-            offset=offset,
-            has_more=(offset + len(items)) < total,
-        )
-    finally:
-        repo.close()
+    items, total = repo.list_techniques(
+        limit=limit,
+        offset=offset,
+        tactic=tactic,
+        platform=platform,
+        is_subtechnique=is_subtechnique,
+    )
+    return PaginatedResponse(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_more=(offset + len(items)) < total,
+    )
 
 
 @router.get("/{attack_id}", summary="Get Technique Deep Graph Detail", response_model=TechniqueDetail)
@@ -54,13 +48,10 @@ def get_technique(
     - Adversary groups (APTs) known to utilize it
     - Software/malware implementing it
     """
-    try:
-        detail = repo.get_technique(attack_id)
-        if not detail:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Technique '{attack_id}' not found in Enterprise ATT&CK.",
-            )
-        return detail
-    finally:
-        repo.close()
+    detail = repo.get_technique(attack_id)
+    if not detail:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Technique '{attack_id}' not found in Enterprise ATT&CK.",
+        )
+    return detail

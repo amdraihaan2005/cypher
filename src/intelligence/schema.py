@@ -1,7 +1,8 @@
 from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from src.mitre.schema import (
+    MitreBaseModel,
     TechniqueItem,
     GroupItem,
     SoftwareItem,
@@ -9,36 +10,36 @@ from src.mitre.schema import (
 )
 
 
-class AttributedGroup(BaseModel):
+class AttributedGroup(MitreBaseModel):
     group: GroupItem
-    matched_techniques: List[str] = Field(description="Technique IDs from the query that this group uses")
-    overlap_count: int
-    overlap_ratio: float = Field(description="Percentage of query techniques this group is known to use")
+    matched_techniques: List[str] = Field(default_factory=list, description="Technique IDs from the query that this group uses")
+    overlap_count: int = 0
+    overlap_ratio: float = Field(default=0.0, description="Percentage of query techniques this group is known to use")
     software_used: List[str] = Field(default_factory=list, description="Malware and tools deployed by this group")
 
 
-class IdentifiedSoftware(BaseModel):
+class IdentifiedSoftware(MitreBaseModel):
     software: SoftwareItem
-    matched_techniques: List[str] = Field(description="Technique IDs implemented by this software")
-    match_count: int
+    matched_techniques: List[str] = Field(default_factory=list, description="Technique IDs implemented by this software")
+    match_count: int = 0
     associated_groups: List[str] = Field(default_factory=list, description="Threat groups known to deploy this tool")
 
 
-class PrioritizedMitigation(BaseModel):
+class PrioritizedMitigation(MitreBaseModel):
     mitigation: MitigationItem
-    mitigated_techniques: List[str] = Field(description="Technique IDs from the attack chain stopped by this control")
-    mitigation_count: int
-    coverage_percentage: float = Field(description="Percentage of the attack chain stopped by this single control")
+    mitigated_techniques: List[str] = Field(default_factory=list, description="Technique IDs from the attack chain stopped by this control")
+    mitigation_count: int = 0
+    coverage_percentage: float = Field(default=0.0, description="Percentage of the attack chain stopped by this single control")
 
 
-class ThreatAnalysisRequest(BaseModel):
+class ThreatAnalysisRequest(MitreBaseModel):
     query: str = Field(..., min_length=2, description="Attack scenario, incident alert, or TTP narrative")
     max_techniques: int = Field(5, ge=1, le=20, description="Maximum number of techniques to analyze")
     k: int = Field(60, ge=1, le=200, description="RRF smoothing constant")
-    history: Optional[List[Dict[str, Any]]] = Field(default_factory=list, description="Previous conversation messages in the thread")
+    history: List[Dict[str, Any]] = Field(default_factory=list, description="Previous conversation messages in the thread")
 
 
-class ThreatAnalysisReport(BaseModel):
+class ThreatAnalysisReport(MitreBaseModel):
     query: str
     identified_techniques: List[TechniqueItem] = Field(default_factory=list)
     tactics_involved: List[str] = Field(default_factory=list)
@@ -51,20 +52,3 @@ class ThreatAnalysisReport(BaseModel):
     ai_answer: Optional[str] = Field(default=None, description="Direct AI answer and tactical intelligence explanation")
     ai_model: Optional[str] = Field(default=None, description="Model used to generate the answer")
 
-
-class ThreatNarrativeResponse(BaseModel):
-    available: bool
-    narrative: str
-    model: Optional[str] = None
-
-
-class ThreatChatRequest(BaseModel):
-    report: ThreatAnalysisReport
-    message: str = Field(..., min_length=1, description="Analyst question or prompt")
-    history: List[Dict[str, str]] = Field(default_factory=list, description="Recent conversation turns")
-
-
-class ThreatChatResponse(BaseModel):
-    available: bool
-    reply: str
-    model: Optional[str] = None

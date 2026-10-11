@@ -1,7 +1,7 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, memo } from 'react';
 import { ArrowUp } from 'lucide-react';
 
-export default function PromptBar({ query, setQuery, onSubmit, loading }) {
+const PromptBar = memo(function PromptBar({ query, setQuery, onSubmit, loading }) {
   const textareaRef = useRef(null);
 
   useEffect(() => {
@@ -31,8 +31,10 @@ export default function PromptBar({ query, setQuery, onSubmit, loading }) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
+          aria-label="Cybersecurity query or MITRE ATT&amp;CK identifier"
         />
         <button
+          type="button"
           className="submit-btn"
           disabled={loading || !query.trim()}
           onClick={() => {
@@ -52,4 +54,6 @@ export default function PromptBar({ query, setQuery, onSubmit, loading }) {
       </div>
     </div>
   );
-}
+});
+
+export default PromptBar;

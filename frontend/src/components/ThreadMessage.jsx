@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { User, Shield } from 'lucide-react';
 import AnalysisResult from './AnalysisResult';
 
-export default function ThreadMessage({ message, onSelectEntity }) {
+const ThreadMessage = memo(function ThreadMessage({ message, onSelectEntity }) {
   if (message.role === 'user') {
     return (
       <div className="thread-user-row">
@@ -41,4 +41,6 @@ export default function ThreadMessage({ message, onSelectEntity }) {
       </div>
     </div>
   );
-}
+});
+
+export default ThreadMessage;

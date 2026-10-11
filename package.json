@@ -5,7 +5,7 @@
   "description": "Cypher AI - MITRE ATT&CK & Threat Intelligence Platform",
   "scripts": {
     "dev": "python dev.py",
-    "dev:backend": "python scripts/run_server.py --port 8000 --reload",
+    "dev:backend": "uvicorn src.api.app:app --reload --port 8000",
     "dev:frontend": "npm run dev --prefix frontend",
     "build:frontend": "npm run build --prefix frontend",
     "test": "python -m unittest discover tests"
