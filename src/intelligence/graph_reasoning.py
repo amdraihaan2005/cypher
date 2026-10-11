@@ -24,8 +24,6 @@ _RE_MITIGATION = re.compile(r'\b(M\d{4})\b', re.IGNORECASE)
 _RE_GROUP = re.compile(r'\b(G\d{4})\b', re.IGNORECASE)
 _RE_SOFTWARE = re.compile(r'\b(S\d{4})\b', re.IGNORECASE)
 
-# Score bonus for explicitly-mentioned IDs so they always rank above
-# marginal semantic hits, but don't completely suppress RRF results.
 _EXPLICIT_ID_BONUS = 1.0
 
 
@@ -48,15 +46,6 @@ def _extract_ids(text: str) -> Dict[str, Set[str]]:
 
 
 def _build_search_query(query: str, history: Optional[List[Dict[str, Any]]]) -> str:
-    """
-    Constructs the search query for the hybrid retrieval layer.
-
-    When conversation history exists, the most recent user message is always
-    prepended to the current query. The embedding model's vector space handles
-    semantic blending — if the current query is self-contained, prior context
-    won't materially shift cosine rankings; if it's a follow-up like
-    "How do I mitigate it?", the prior turn provides the missing referent.
-    """
     if not history:
         return query
 
@@ -132,15 +121,16 @@ def _render_software_block(
 
 
 _SYSTEM_PROMPT = (
-    "You are Cypher AI, an authoritative cybersecurity intelligence engine "
-    "grounded exclusively in the MITRE ATT&CK enterprise framework.\n\n"
+    "You are Cypher, a cybersecurity intelligence assistant. You are grounded exclusively in the MITRE ATT&CK enterprise framework.\n\n"
     "You will receive:\n"
-    "- A user query (incident narrative, technique ID, or follow-up question)\n"
+    "- A user query that may involve anything.\n"
     "- Conversation history (if this is an ongoing dialogue)\n"
     "- Retrieved MITRE ATT&CK context (verified techniques, groups, software, mitigations)\n\n"
     "RESPONSE RULES:\n"
     "1. CONVERSATION CONTINUITY:\n"
-    "   - If conversation history is present, you are in an ongoing dialogue. Never re-introduce yourself.\n"
+    "   - Understand the main subject of the conversation and the intent of the user and respond to the main question by the user accordingly.\n"
+    "   - If the user asks you to do something out of scope, refuse politely.\n"
+    "   - If conversation history is present, you are in an ongoing dialogue. Continue the conversation in the best appropriate way.\n"
     "   - Interpret short follow-ups directly in the context of preceding turns.\n"
     "2. MITRE GROUNDING:\n"
     "   - Base all technical claims strictly on the provided MITRE context. Never fabricate attack IDs or group names.\n"
@@ -152,37 +142,6 @@ _SYSTEM_PROMPT = (
 
 
 class GraphReasoningEngine:
-    """
-    Threat Intelligence Retrieve-Enrich-Synthesize Pipeline.
-
-    Orchestrates a 3-stage pipeline for MITRE ATT&CK threat analysis:
-
-    1. RETRIEVE — Hybrid search (dense ONNX embeddings + sparse BM25 FTS5,
-       fused via Reciprocal Rank Fusion) combined with explicit regex entity
-       extraction. Candidate technique IDs are ranked by a scored priority
-       merge that preserves both explicit mentions and semantic relevance.
-
-    2. ENRICH — Relational graph joins against SQLite junction tables
-       (technique_mitigations, group_techniques, software_techniques) to
-       hydrate associated mitigations, threat actors, and software.
-       Aggregation is performed at the SQL layer (GROUP BY / COUNT /
-       GROUP_CONCAT) — not in Python loops.
-
-    3. SYNTHESIZE — Async LLM generation grounded strictly on the retrieved
-       and enriched MITRE context via GroqCloud.
-
-    Note: This is NOT multi-hop graph traversal. Step 2 performs 1-hop
-    relational joins (WHERE technique_id IN ...), which is efficient and
-    deterministic but should not be confused with graph reasoning algorithms
-    like BFS, DFS, or PageRank.
-
-    Concurrency: analyze_narrative is async. The LLM network call is awaited,
-    releasing the event loop to serve other requests while the LLM responds.
-    SQLite I/O is blocking but fast (sub-millisecond local reads); FastAPI
-    runs sync DB calls on its threadpool executor, while this method itself
-    does not block the event loop during the expensive LLM round-trip.
-    """
-
     def __init__(
         self,
         repo: Optional[MitreRepository] = None,
