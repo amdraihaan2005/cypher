@@ -11,7 +11,6 @@ const AnalysisResult = memo(function AnalysisResult({ report, onSelectEntity }) 
   const groups = report.attributed_groups || [];
   const software = report.identified_software || [];
   const aiAnswer = report.ai_answer;
-  const aiModel = report.ai_model || 'openai/gpt-oss-120b';
 
   const renderedMarkdown = useMemo(() => {
     if (!aiAnswer) return null;
@@ -33,9 +32,6 @@ const AnalysisResult = memo(function AnalysisResult({ report, onSelectEntity }) 
               <Sparkles size={16} />
               <span>Cypher AI Intelligence Profile</span>
             </div>
-            <span className="badge-count" style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8' }}>
-              {aiModel}
-            </span>
           </div>
           <div className="ai-answer-body markdown-content" style={{ color: 'var(--text-secondary)' }}>
             <p>I am ready to assist with MITRE ATT&amp;CK intelligence. Describe an observed threat activity, attack vector, or technique ID to generate an intelligence profile.</p>
@@ -52,11 +48,8 @@ const AnalysisResult = memo(function AnalysisResult({ report, onSelectEntity }) 
         <div className="section-header">
           <div className="section-title" style={{ color: '#38bdf8' }}>
             <Sparkles size={16} />
-            <span>Cypher AI Intelligence Profile</span>
+            <span>Cypher AI Intelligence</span>
           </div>
-          <span className="badge-count" style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8' }}>
-            {aiModel}
-          </span>
         </div>
         <div className="ai-answer-body markdown-content">
           {renderedMarkdown || (

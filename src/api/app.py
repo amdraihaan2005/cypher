@@ -45,8 +45,6 @@ async def lifespan(app: FastAPI):
 
     try:
         engine = get_reasoning_engine()
-        # Pre-warm the FastEmbed ONNX model so the first request isn't slow.
-        # engine.search_engine.dense is the DenseSearchEngine instance.
         _ = engine.search_engine.dense.model
         print("[Lifespan] Core threat intelligence engine pre-warmed successfully.")
     except Exception as e:
@@ -63,11 +61,9 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="Cypher AI - MITRE ATT&CK Intelligence API",
+        title="Cypher.",
         description=(
-            "High-performance REST API and knowledge engine for Enterprise MITRE ATT&CK. "
-            "Provides unified intelligence across tactics, techniques, sub-techniques, "
-            "defensive mitigations, threat groups (APTs), and malware/tools."
+            "High-performance Cybersecurity Assistant based on MITRE ATT&CK. "
         ),
         version="1.0.0",
         docs_url="/docs",

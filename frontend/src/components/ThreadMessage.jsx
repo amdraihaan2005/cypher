@@ -26,7 +26,7 @@ const ThreadMessage = memo(function ThreadMessage({ message, onSelectEntity }) {
         {message.loading ? (
           <div className="assistant-loading-box">
             <div className="spinner" style={{ width: '16px', height: '16px' }} />
-            <span>Analyzing MITRE ATT&amp;CK knowledge graph with {message.model || 'openai/gpt-oss-120b'}...</span>
+            <span>Analyzing MITRE ATT&amp;CK knowledge graph</span>
           </div>
         ) : message.error ? (
           <div className="assistant-error-box">

@@ -9,13 +9,6 @@ from src.mitre.db import get_connection, DEFAULT_DB_PATH
 
 
 def sanitize_fts_query(query: str) -> str:
-    """
-    Sanitizes user input into a safe SQLite FTS5 query string.
-    - Preserves exact quoted phrases (e.g. "lsass memory").
-    - Safely isolates technical identifiers (e.g. T1059.001, CVE-2021-44228, mimikatz.exe).
-    - Joins disjunctive clauses with OR, allowing BM25 to mathematically rank term relevance
-      via inverse document frequency (IDF).
-    """
     cleaned = query.strip()
     if not cleaned:
         return ""
@@ -46,7 +39,6 @@ def sanitize_fts_query(query: str) -> str:
 
 
 def _safe_json_join(val: Optional[str]) -> str:
-    """Safely decodes a JSON list of strings into a space-separated string."""
     if not val:
         return ""
     try:

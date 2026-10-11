@@ -19,10 +19,6 @@ MIN_CANDIDATE_POOL_DEPTH: int = 60
 
 
 def _min_max_scale(scores: Dict[Tuple[str, str], float]) -> Dict[Tuple[str, str], float]:
-    """
-    Normalizes a dictionary of scores to a standard 0.0 - 1.0 range.
-    Prevents unbounded sparse BM25 scores from overpowering bounded dense scores.
-    """
     if not scores:
         return {}
     vals = list(scores.values())
@@ -45,12 +41,6 @@ class ScoredEntity(BaseModel):
 
 
 class HybridSearchEngine:
-    """
-    Coordinates Dense (semantic vector) and Sparse (BM25 keyword) search
-    across ALL MITRE ATT&CK entities: Tactics, Techniques, Mitigations,
-    Adversary Groups, and Software/Tools.
-    """
-
     def __init__(
         self,
         sparse_engine: Optional[SparseSearchEngine] = None,
@@ -82,11 +72,6 @@ class HybridSearchEngine:
     def _batch_hydrate(
         self, candidates: List[Dict[str, Any]]
     ) -> Dict[Tuple[str, str], Tuple[str, Any]]:
-        """
-        Batch hydrates entity names and details by grouping candidates by entity_type
-        and executing single SQL queries using WHERE attack_id IN (...).
-        Eliminates the N+1 query loop.
-        """
         by_type: Dict[str, Set[str]] = {}
         for c in candidates:
             clean_type = c["entity_type"].lower().strip()
@@ -175,21 +160,7 @@ class HybridSearchEngine:
         alpha: float = 0.6,
         rrf_weights: Optional[Dict[str, float]] = None,
     ) -> Union[List[ScoredEntity], List[Tuple[str, str, float]]]:
-        """
-        Unified search across all MITRE ATT&CK entities (tactics, techniques, mitigations, groups, software).
-
-        Args:
-            query: The search term, ID, keyword, or natural language query.
-            entity_type: Optional entity filter ('technique', 'tactic', 'mitigation', 'group', 'software').
-            limit: Maximum candidates to return.
-            mode: Search strategy ('rrf', 'dense', 'sparse', 'hybrid'/'linear').
-            hydrate: If True, executes batch SQL queries and returns List[ScoredEntity].
-                     If False, returns lightweight List[Tuple[entity_id, entity_type, score]].
-            k: Smoothing constant for RRF ranking (default: 60).
-            min_dense_score: Minimum similarity threshold for dense matches.
-            alpha: Weight for dense matches in linear hybrid mode (0.0 to 1.0).
-            rrf_weights: Optional dictionary of weights for RRF channels (e.g. {'dense': 1.2, 'sparse': 0.8}).
-        """
+    
         if not query.strip():
             return []
 
@@ -319,10 +290,6 @@ class HybridSearchEngine:
         alpha: float = 0.6,
         rrf_weights: Optional[Dict[str, float]] = None,
     ) -> Union[List[ScoredEntity], List[Tuple[str, str, float]]]:
-        """
-        Asynchronously executes unified search by offloading retrieval,
-        embedding inference, and batch hydration to a threadpool worker.
-        """
         return await asyncio.to_thread(
             self.search,
             query,

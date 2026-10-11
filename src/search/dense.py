@@ -33,8 +33,7 @@ def _safe_json_loads(val: Optional[str], default=None) -> Any:
 
 class DenseSearchEngine:
     """
-    Dense semantic vector search using FastEmbed ONNX embeddings and NumPy cosine similarity
-    covering ALL MITRE ATT&CK entities: Tactics, Techniques, Mitigations, Groups, Software.
+    Dense semantic vector search using FastEmbed ONNX embeddings and NumPy cosine similarity.
     """
 
     def __init__(
@@ -103,11 +102,6 @@ class DenseSearchEngine:
         }
 
     def build_index(self):
-        """
-        Generates and persists embeddings for ALL 1,757+ MITRE entities.
-        Fault-tolerant: handles corrupted rows gracefully.
-        Memory-efficient: streams directly into pre-allocated NumPy array without duplication.
-        """
         conn = get_connection(self.db_path)
         try:
             tac_rows = conn.execute("SELECT attack_id, name, shortname, description FROM tactics ORDER BY attack_id").fetchall()
@@ -303,10 +297,5 @@ class DenseSearchEngine:
         limit: int = 20,
         min_score: float = 0.0,
     ) -> List[Tuple[str, str, float]]:
-        """
-        Asynchronously executes search by offloading CPU-intensive ONNX embedding
-        and matrix dot-product operations to a threadpool worker.
-        Prevents blocking the web server event loop.
-        """
         return await asyncio.to_thread(self.search, query, entity_type, limit, min_score)
 
